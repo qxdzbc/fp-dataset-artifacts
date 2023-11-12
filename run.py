@@ -1,12 +1,28 @@
 import datasets
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, \
-    AutoModelForQuestionAnswering, Trainer, TrainingArguments, HfArgumentParser
+    AutoModelForQuestionAnswering, Trainer, TrainingArguments, HfArgumentParser, EvalPrediction
 from helpers import prepare_dataset_nli, prepare_train_dataset_qa, \
     prepare_validation_dataset_qa, QuestionAnsweringTrainer, compute_accuracy
 import os
 import json
 
 NUM_PREPROCESSING_WORKERS = 2
+"""
+
+"""
+# continue training from a checkpoint
+rfc=False
+# run evaluation on test set instead of evaluation set
+doTest = True
+useHans = True
+
+# 3 possible values:
+# "lexical_overlap",
+# 'subsequence'
+# 'constituent'
+# None to disable filtering
+hansBiasTypeFilter = 'constituent'
+
 
 
 def main():
@@ -70,7 +86,14 @@ def main():
         eval_split = 'validation_matched' if dataset_id == ('glue', 'mnli') else 'validation'
         # Load the raw data
         dataset = datasets.load_dataset(*dataset_id)
-    
+
+    if useHans:
+        # hansDataSet = datasets.load_dataset("hans", split=datasets.ReadInstruction("train", from_=0, to=5, unit="abs"))
+        hansDataSet = datasets.load_dataset("hans")
+        if hansBiasTypeFilter is not None:
+            hansDataSet = hansDataSet.filter(lambda sample: sample['heuristic'] == hansBiasTypeFilter)
+        dataset = hansDataSet
+
     # NLI models need to have the output label count specified (label 0 is "entailed", 1 is "neutral", and 2 is "contradiction")
     task_kwargs = {'num_labels': 3} if args.task == 'nli' else {}
 
@@ -113,6 +136,11 @@ def main():
             remove_columns=train_dataset.column_names
         )
     if training_args.do_eval:
+        if doTest:
+            eval_split = "test"
+            if useHans:
+                eval_split = "train"
+                eval_split = "validation"
         eval_dataset = dataset[eval_split]
         if args.max_eval_samples:
             eval_dataset = eval_dataset.select(range(args.max_eval_samples))
@@ -156,11 +184,13 @@ def main():
         train_dataset=train_dataset_featurized,
         eval_dataset=eval_dataset_featurized,
         tokenizer=tokenizer,
-        compute_metrics=compute_metrics_and_store_predictions
+        compute_metrics=compute_metrics_and_store_predictions,
     )
     # Train and/or evaluate
     if training_args.do_train:
-        trainer.train()
+        trainer.train(
+            resume_from_checkpoint=rfc
+        )
         trainer.save_model()
         # If you want to customize the way the loss is computed, you should subclass Trainer and override the "compute_loss"
         # method (see https://huggingface.co/transformers/_modules/transformers/trainer.html#Trainer.compute_loss).
